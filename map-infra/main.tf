@@ -11,110 +11,60 @@ provider "aws" {
   region = "us-east-1"
 }
 
-data "aws_ami" "ubt" {
-  most_recent = true
-  owners      = ["099720109477"]
+resource "random_id" "bucket_suffix" {
+  byte_length = 4
+}
 
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+resource "aws_s3_bucket" "website" {
+  bucket = "world-map-tracker-${random_id.bucket_suffix.hex}"
+
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_website_configuration" "website" {
+  bucket = aws_s3_bucket.website.id
+
+  index_document {
+    suffix = "index.html"
   }
 }
 
-resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+resource "aws_s3_bucket_public_access_block" "website" {
+  bucket = aws_s3_bucket.website.id
 
-  tags = {
-    Name = "MapVPC"
-  }
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
 }
 
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
+resource "aws_s3_bucket_policy" "website" {
+  bucket = aws_s3_bucket.website.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "PublicReadGetObject"
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.website.arn}/*"
+      },
+    ]
+  })
 
-  tags = {
-    Name = "MapPublicSubnet"
-  }
+  depends_on = [aws_s3_bucket_public_access_block.website]
 }
 
-resource "aws_internet_gateway" "igw" {
-  vpc_id = aws_vpc.main.id
-
-  tags = {
-    Name = "MapIGW"
-  }
+resource "aws_s3_object" "index" {
+  bucket       = aws_s3_bucket.website.id
+  key          = "index.html"
+  source       = "${path.module}/../index.html"
+  content_type = "text/html"
+  etag         = filemd5("${path.module}/../index.html")
 }
 
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.igw.id
-  }
-
-  tags = {
-    Name = "MapPublicRouteTable"
-  }
-}
-
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_security_group" "sg_web" {
-  name_prefix = "web-sg-"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-resource "aws_instance" "srv" {
-  ami           = data.aws_ami.ubt.id
-  instance_type = "t2.micro"
-  subnet_id     = aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.sg_web.id]
-
-  user_data = <<-EOF
-              #!/bin/bash
-              apt-get update -y
-              apt-get install -y nginx git
-              systemctl start nginx
-              systemctl enable nginx
-              rm -rf /var/www/html/*
-              git clone https://github.com/devang-jalag/world-map-tracker.git
-              cp world-map-tracker/index.html /var/www/html/
-              EOF
-
-  tags = {
-    Name = "MapSrv"
-  }
-}
-
-output "pub_ip" {
-  value = aws_instance.srv.public_ip
+output "website_url" {
+  value       = aws_s3_bucket_website_configuration.website.website_endpoint
+  description = "The URL of the static website"
 }
