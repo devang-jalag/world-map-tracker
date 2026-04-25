@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Leaflet Free Interactive Map</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <style>
+        /* CSS Styling */
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background-color: #f8f9fa; }
+
+        /* Header Styling */
+        header { background-color: #2c3e50; padding: 15px 20px; display: flex; align-items: center; justify-content: space-between; color: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 1000; position: relative; }
+        .search-container { display: flex; align-items: center; gap: 10px; width: 60%; }
+        #searchBox { flex-grow: 1; padding: 10px; border-radius: 5px; border: none; font-size: 16px; outline: none; }
+        .btn { padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: bold; transition: background 0.2s; }
+        .btn-add { background-color: #27ae60; color: white; }
+        .btn-add:hover { background-color: #2ecc71; }
+        .btn-clear { background-color: #c0392b; color: white; }
+        .btn-clear:hover { background-color: #e74c3c; }
+        .btn-reset { background-color: #3498db; color: white; margin-left: 15px; }
+        .btn-reset:hover { background-color: #2980b9; }
+
+        /* Layout */
+        .layout { display: flex; flex-grow: 1; height: calc(100vh - 65px); }
+
+        /* Sidebar Styling */
+        aside { width: 300px; background: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; z-index: 500; }
+        .sidebar-header { padding: 15px; background: #ecf0f1; border-bottom: 1px solid #ddd; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .sidebar-header span { font-size: 18px; color: #2c3e50; }
+        #selectedList { list-style: none; padding: 15px; overflow-y: auto; flex-grow: 1; }
+        #selectedList li { background: #ecf0f1; padding: 10px 15px; margin-bottom: 10px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: transform 0.1s; }
+        #selectedList li:hover { transform: scale(1.02); }
+        .remove-btn { background: none; border: none; color: #7f8c8d; cursor: pointer; font-weight: bold; font-size: 16px; transition: color 0.2s; }
+        .remove-btn:hover { color: #c0392b; }
+
+        /* Map Container */
+        #map { flex-grow: 1; height: 100%; width: 100%; z-index: 1; }
+        
+        /* Custom Leaflet Tooltip */
+        .custom-tooltip { background: rgba(44, 62, 80, 0.9); border: none; color: white; font-weight: bold; border-radius: 4px; padding: 5px 10px; }
+        .leaflet-tooltip-left.custom-tooltip::before { border-left-color: rgba(44, 62, 80, 0.9); }
+        .leaflet-tooltip-right.custom-tooltip::before { border-right-color: rgba(44, 62, 80, 0.9); }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="search-container">
+            <input type="text" id="searchBox" placeholder="Start typing a country name..." list="countryNames">
+            <datalist id="countryNames"></datalist>
+            <button class="btn btn-add" onclick="addCountry()">Add</button>
+        </div>
+        <div style="display: flex; align-items: center;">
+            <h2>OpenStreetMap Tracker</h2>
+            <button class="btn btn-reset" onclick="resetMap()">Reset View</button>
+        </div>
+    </header>
+
+    <div class="layout">
+        <aside>
+            <div class="sidebar-header">
+                <span>Selected</span>
+                <button class="btn btn-clear" onclick="clearAll()">Clear All</button>
+            </div>
+            <ul id="selectedList"></ul>
+        </aside>
+        <main id="map"></main>
+    </div>
+
+    <script>
+        // --- State Management ---
+        let map;
+        let geojsonLayer;
+        let geoFeatures = []; 
+        let selectedCountries = new Map(); 
+        let currentSearchQuery = '';
+
+        const vibrantColors = [
+            '#0000FF', '#1E90FF', '#00008B', '#4169E1', '#87CEEB', '#00CED1',
+            '#FF0000', '#8B0000', '#DC143C', '#FF1493', '#FF69B4', '#C71585',
+            '#008000', '#006400', '#32CD32', '#7CFC00', '#2E8B57', '#00FF7F',
+            '#800080', '#4B0082', '#8A2BE2', '#9932CC', '#DA70D6', '#6A5ACD',
+            '#FFA500', '#FF8C00', '#FFD700', '#FFFF00', '#F4A460', '#D2691E'
+        ];
+
+        const searchInput = document.getElementById('searchBox');
+        const dataList = document.getElementById('countryNames');
+        const listContainer = document.getElementById('selectedList');
+
+        // --- Initialize Leaflet Map ---
+        function initMap() {
+            // Setup map with boundaries so you can't scroll infinitely into gray space
+            const bounds = [ [-90, -180], [90, 180] ];
+            
+            map = L.map('map', {
+                center: [20, 0],
+                zoom: 2.5,
+                minZoom: 2,
+                maxBounds: bounds, // Keep moderate give on sides
+                maxBoundsViscosity: 1.0
+            });
+
+            // Load the free OpenStreetMap tiles
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            // Fetch GeoJSON Data
+            fetch('https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson')
+                .then(response => response.json())
+                .then(data => {
+                    geoFeatures = data.features;
+                    
+                    // Populate Autocomplete
+                    geoFeatures.forEach(feature => {
+                        const countryName = feature.properties.name;
+                        if(countryName) {
+                            const option = document.createElement('option');
+                            option.value = countryName;
+                            dataList.appendChild(option);
+                        }
+                    });
+
+                    // Add GeoJSON Layer to map
+                    geojsonLayer = L.geoJSON(data, {
+                        style: styleFeature,
+                        onEachFeature: onEachFeature
+                    }).addTo(map);
+                });
+        }
+
+        // --- Styling the Map Layer ---
+        function styleFeature(feature) {
+            const name = feature.properties.name;
+            
+            // If Selected
+            if (selectedCountries.has(name)) {
+                return { fillColor: selectedCountries.get(name), fillOpacity: 0.6, color: '#ffffff', weight: 1 };
+            }
+            
+            // If Searching/Highlighting
+            if (currentSearchQuery && name && name.toLowerCase().includes(currentSearchQuery)) {
+                return { fillColor: '#f1c40f', fillOpacity: 0.6, color: '#ffffff', weight: 1 };
+            }
+
+            // Default (Transparent to show OpenStreetMap underneath!)
+            return { fillColor: 'transparent', fillOpacity: 0.01, color: 'transparent', weight: 0 };
+        }
+
+        // --- Map Interactions (Hover & Click) ---
+        function onEachFeature(feature, layer) {
+            // Built-in Leaflet Tooltip that tracks mouse
+            layer.bindTooltip(feature.properties.name, { className: 'custom-tooltip', sticky: true });
+
+            layer.on({
+                mouseover: (e) => {
+                    const layer = e.target;
+                    // Only apply hover dimming if it's NOT selected or currently searched
+                    if (!selectedCountries.has(feature.properties.name) && 
+                        !(currentSearchQuery && feature.properties.name.toLowerCase().includes(currentSearchQuery))) {
+                        layer.setStyle({ fillColor: '#bdc3c7', fillOpacity: 0.4 });
+                    }
+                },
+                mouseout: (e) => {
+                    geojsonLayer.resetStyle(e.target); // Resets back to our styleFeature rules
+                },
+                click: (e) => {
+                    addSpecificCountry(feature.properties.name);
+                }
+            });
+        }
+
+        // --- Core Functions ---
+        function resetMap() {
+            map.setView([20, 0], 2.5, { animate: true, duration: 0.75 });
+        }
+
+        searchInput.addEventListener('input', (e) => {
+            currentSearchQuery = e.target.value.toLowerCase().trim();
+            if(geojsonLayer) geojsonLayer.setStyle(styleFeature); // Refresh styles instantly
+        });
+
+        searchInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') addCountry();
+        });
+
+        function addCountry() {
+            const query = searchInput.value.trim().toLowerCase();
+            if (!query) return;
+
+            const match = geoFeatures.find(f => 
+                f.properties.name && f.properties.name.toLowerCase() === query
+            );
+
+            if (match) {
+                addSpecificCountry(match.properties.name);
+            } else {
+                alert("Country not found on the map. Please select from the dropdown.");
+            }
+        }
+
+        function addSpecificCountry(countryName) {
+            if (!selectedCountries.has(countryName)) {
+                const randomIndex = Math.floor(Math.random() * vibrantColors.length);
+                selectedCountries.set(countryName, vibrantColors[randomIndex]);
+            }
+            searchInput.value = ''; 
+            currentSearchQuery = '';
+            updateUI();
+        }
+
+        function removeCountry(countryName) {
+            selectedCountries.delete(countryName);
+            updateUI();
+        }
+
+        function clearAll() {
+            selectedCountries.clear();
+            searchInput.value = '';
+            currentSearchQuery = '';
+            updateUI();
+        }
+
+        function updateUI() {
+            if(geojsonLayer) geojsonLayer.setStyle(styleFeature);
+
+            listContainer.innerHTML = '';
+            const sortedCountries = Array.from(selectedCountries.keys()).sort();
+            
+            sortedCountries.forEach(country => {
+                const color = selectedCountries.get(country);
+                const li = document.createElement('li');
+                li.style.borderLeft = `6px solid ${color}`; 
+                li.innerHTML = `
+                    <span style="font-weight: 500;">${country}</span>
+                    <button class="remove-btn" onclick="removeCountry('${country.replace(/'/g, "\\'")}')" title="Remove">✕</button>
+                `;
+                listContainer.appendChild(li);
+            });
+        }
+
+        // Boot up the map!
+        window.onload = initMap;
+    </script>
+</body>
+</html>
