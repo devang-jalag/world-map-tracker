@@ -2,6 +2,8 @@
 
 **[Live Demo](https://d3rfup3qdmix7x.cloudfront.net)**
 
+P.S. due to AWS credits expiring, the live demo fails currently :) ... will make it up and running soon...! cheers!
+
 A high-performance, interactive mapping application designed for global data visualization. Built with vanilla JavaScript and Leaflet.js, this project delivers a rich spatial experience prioritizing speed and dependency minimization.
 
 ## Cloud Infrastructure & Scalability
